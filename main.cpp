@@ -1,410 +1,96 @@
-#include <iostream>
-#include <vector>
-#include <cstdlib>
-#include <chrono>
-#include <sstream>
-#include <string>
-#include <functional>
-#include <map>
-#include <fstream>
-#include <algorithm>
-#include <cmath>
-#include <unordered_map>
-#include <set>
-#include <limits>
-#include <numeric>
-#include <iomanip>
+import time
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+import os
 
-using namespace std;
+# Ruta al archivo de comunicación
+PATH = "/Users/santiagosalas/Desktop/python/mensaje.txt"
 
-class Point
-{
-public:
-    std::vector<double> coords;
+# Estado de control
+last_file_size = -1 
+last_frequencies = {}
 
-    Point() {}
-    Point(int k) : coords(k) {}
-    Point(const std::vector<double>& coords_) : coords(coords_) {}
-    Point(std::vector<double>&& coords_) : coords(std::move(coords_)) {}
+plt.ion() # modo interactivo para refrescar la nube
+fig, ax = plt.subplots(figsize=(10, 5)) # Crear figura y eje una vez
 
-    bool operator==(const Point& other) const { return coords == other.coords; }
-    bool operator<(const Point& other) const { return coords < other.coords; }
-    Point operator+(const Point& other) const {
-        std::vector<double> result(coords.size());
-        std::transform(coords.begin(), coords.end(), other.coords.begin(), result.begin(), std::plus<>());
-        return result;
-    }
-    Point operator/(double k) const {
-        std::vector<double> result(coords.size());
-        std::transform(coords.begin(), coords.end(), result.begin(), [k](double c) { return c / k; });
-        return result;
-    }
-    
-    double distanceSq(const Point& other) const {
-        double dist = 0.0;
-        for (size_t i = 0; i < coords.size(); ++i) {
-            dist += pow(coords[i] - other.coords[i], 2);
-        }
-        return dist;
-    }
-};
+def generar_nube(frecuencias):
+    """Genera y muestra la nube de palabras a partir de un diccionario de frecuencias."""
+    if not frecuencias:
+        ax.text(0.5, 0.5, "Esperando datos del productor C++...", 
+                ha='center', va='center', fontsize=20, color='gray')
+        ax.axis("off")
+        return
 
-namespace std {
-    template <>
-    struct hash<Point> {
-        size_t operator()(const Point& p) const {
-            size_t seed = 0;
-            for (double val : p.coords) {
-                seed ^= (std::hash<double>()(val) + 0x9e3779b9 + (seed << 6) + (seed >> 2));
-            }
-            return seed;
-        }
-    };
-}
+    # WordCloud pide un diccionario {palabra: frecuencia}
+    wc = WordCloud(
+        width=800,
+        height=400,
+        background_color="white",
+        colormap="viridis"
+    ).generate_from_frequencies(frecuencias)
 
-class KDNode
-{
-public:
-    Point point;
-    KDNode *left, *right;
-    
-    KDNode(const Point& p) : point(p), left(NULL), right(NULL) {}
-};
+    # Mostrar la nube
+    ax.clear()
+    ax.imshow(wc, interpolation="bilinear")
+    ax.axis("off")
+    ax.set_title("WordCloud de Temas (Acumulativo)", fontsize=16)
+    plt.pause(0.01)
 
-class KDTree
-{
-private:
-    KDNode* root;
-    int k_dim;
+# Inicializar la nube con un mensaje de espera
+generar_nube(last_frequencies)
 
-    KDNode* insert(std::vector<Point>& points, int start, int end, int depth)
-    {
-        if (start >= end) return nullptr;
+print("--- INICIANDO CONSUMIDOR PYTHON ---")
+print("Escuchando archivo:", PATH)
 
-        int dim = depth % k_dim, median = (start + end) / 2;
+while True:
+    try:
+        # 1. Verificar si el archivo ha cambiado de tamaño
+        current_file_size = os.stat(PATH).st_size
         
-        std::nth_element(points.begin() + start, points.begin() + median,
-                         points.begin() + end,
-                         [dim](const Point& a, const Point& b) {
-                             return a.coords[dim] < b.coords[dim];
-                         });
-
-        KDNode* node = new KDNode(points[median]);
-        node->left = insert(points, start, median, depth + 1);
-        node->right = insert(points, median + 1, end, depth + 1);
-
-        return node;
-    }
-    
-    Point* nearestPointRecursive(KDNode* root_, const Point& target, int depth, Point* best, double& best_dist_sq)
-    {
-        if (!root_) return best;
-
-        double dist_sq = root_->point.distanceSq(target);
-        if (dist_sq < best_dist_sq) {
-            best_dist_sq = dist_sq;
-            best = &root_->point;
-        }
-
-        int dim = depth % k_dim;
-        bool isLeft = target.coords[dim] < root_->point.coords[dim];
-        KDNode* next = isLeft ? root_->left : root_->right;
-        KDNode* other = isLeft ? root_->right : root_->left;
-
-        best = nearestPointRecursive(next, target, depth + 1, best, best_dist_sq);
-        
-        double diff = target.coords[dim] - root_->point.coords[dim];
-        if (diff * diff < best_dist_sq) {
-            best = nearestPointRecursive(other, target, depth + 1, best, best_dist_sq);
-        }
-        return best;
-    }
-
-public:
-    KDTree(const std::vector<Point>& points, int k_dim_val) : k_dim(k_dim_val)
-    {
-        std::vector<Point> temp = points;
-        root = insert(temp, 0, temp.size(), 0);
-    }
-    
-    Point* nearestPoint(const Point& point)
-    {
-        double best_dist_sq = std::numeric_limits<double>::max();
-        return nearestPointRecursive(root, point, 0, nullptr, best_dist_sq);
-    }
-};
-
-class Kmeans {
-private:
-    vector<pair<double, double>> bounds;
-    vector<Point> points;
-
-    set<Point> chooseCentroids(int k) {
-        set<Point> centroids;
-        while (centroids.size() < k) {
-            int randNum = rand() % points.size();
-            centroids.emplace(points[randNum]);
-        }
-        return centroids;
-    }
-
-    Point calcMean(const vector<Point>& clusterPoints) {
-        if (clusterPoints.empty()) return Point(points[0].coords.size());
-        
-        Point sum = clusterPoints[0];
-        for (size_t i = 1; i < clusterPoints.size(); ++i) {
-            sum = sum + clusterPoints[i];
-        }
-        return sum / clusterPoints.size();
-    }
-    
-    unordered_map<Point, vector<Point>> clustering(const set<Point>& centroids) {
-        unordered_map<Point, vector<Point>> clusters;
-        
-        for(const auto& c : centroids) clusters[c] = {};
-        
-        for (const auto& p : points) {
-            double min_dist = std::numeric_limits<double>::max();
-            Point closest_centroid;
+        if current_file_size > last_file_size:
+            print(f"Cambiando de tamaño: {last_file_size} -> {current_file_size}. Leyendo...")
+            last_file_size = current_file_size
             
-            for (const auto& c : centroids) {
-                double dist = p.distanceSq(c);
-                if (dist < min_dist) {
-                    min_dist = dist;
-                    closest_centroid = c;
-                }
-            }
-            if (clusters.count(closest_centroid)) {
-                clusters[closest_centroid].push_back(p);
-            }
-        }
-        return clusters;
-    }
-    
-    unordered_map<Point, vector<Point>> clustering_kd(const set<Point>& centroids) {
-        unordered_map<Point, vector<Point>> clusters;
-        
-        for(const auto& c : centroids) clusters[c] = {};
-
-        if (centroids.empty()) return clusters;
-        int k_dim = centroids.begin()->coords.size();
-        KDTree tree(std::vector<Point>(centroids.begin(), centroids.end()), k_dim);
-
-        for (const auto& p : points) {
-            Point* closest_centroid_ptr = tree.nearestPoint(p);
-            if (closest_centroid_ptr) {
-                clusters[*closest_centroid_ptr].push_back(p);
-            }
-        }
-        return clusters;
-    }
-    
-    set<Point> recalculateCentroids(const unordered_map<Point, vector<Point>>& clusters) {
-        set<Point> newCentroids;
-        for (const auto& pair : clusters) {
-            newCentroids.insert(calcMean(pair.second));
-        }
-        return newCentroids;
-    }
-
-public:
-    Kmeans(const std::string& filename, int lim) {
-        ifstream file(filename);
-        if (!file) throw runtime_error("No se pudo abrir el archivo csv: " + filename);
-
-        string line;
-        getline(file,line);
-
-        for (int lineCount = 0; lineCount < lim && getline(file, line); ++lineCount) {
-            istringstream iss(line); string svalue;
-            vector<double> coords;
+            # 2. Leer TODAS las líneas del archivo (acumulación)
+            # El archivo C++ está en modo append, por lo que leer todo acumula los datos.
+            with open(PATH, "r") as f:
+                lines = f.readlines()
             
-            while (getline(iss, svalue, ',')) {
-                coords.push_back(std::stod(svalue));
-            }
-            if (!coords.empty()) {
-                points.push_back(std::move(coords));
-            }
-        }
-        if (points.empty()) throw runtime_error("No se cargaron puntos.");
-    }
+            # 3. Procesar las líneas CSV
+            current_frequencies = {}
+            for line in lines:
+                try:
+                    # El formato es: palabra,frecuencia\n
+                    parts = line.strip().split(',')
+                    if len(parts) == 2:
+                        palabra = parts[0]
+                        frecuencia = int(parts[1])
+                        # Acumulamos las frecuencias si la misma palabra aparece varias veces
+                        current_frequencies[palabra] = current_frequencies.get(palabra, 0) + frecuencia
+                except ValueError:
+                    # Ignorar líneas mal formadas o vacías
+                    continue
 
-    unordered_map<Point, vector<Point>> kmeans(int k, int iterations) {
-        unordered_map<Point, vector<Point>> clusters;
-        set<Point> centroids = chooseCentroids(k);
-
-        for (size_t i = 0; i < iterations; i++) {
-            clusters = clustering(centroids);
-            set<Point> newCentroids = recalculateCentroids(clusters);
-            if (centroids == newCentroids) break;
-            centroids = std::move(newCentroids);
-        }
-        return clusters;
-    }
-
-    unordered_map<Point, vector<Point>> kmeans_kd(int k, int iterations) {
-        unordered_map<Point, vector<Point>> clusters;
-        set<Point> centroids = chooseCentroids(k);
-
-        for (size_t i = 0; i < iterations; i++) {
-            clusters = clustering_kd(centroids);
-            set<Point> newCentroids = recalculateCentroids(clusters);
-            if (centroids == newCentroids) break;
-            centroids = std::move(newCentroids);
-        }
-        return clusters;
-    }
-    
-    void ExportClustersToJson(const unordered_map<Point, vector<Point>>& clusters, const std::string& filename) {
-        std::ofstream file(filename);
-        if (!file.is_open()) {
-            std::cerr << "ERROR: No se pudo crear el archivo JSON de clusters en: " << filename << std::endl;
-            return;
-        }
-        
-        file << "{\n  \"clusters\": {\n";
-        int cluster_idx = 0;
-        
-        for (const auto& entry : clusters) {
-            file << "    \"" << cluster_idx << "\": [\n      [";
-            for (size_t i = 0; i < entry.first.coords.size(); ++i) {
-                file << std::fixed << std::setprecision(4) << entry.first.coords[i] << (i < entry.first.coords.size() - 1 ? ", " : "");
-            }
+            # 4. Actualizar la nube de palabras
+            last_frequencies = current_frequencies
+            generar_nube(last_frequencies)
             
-            file << "],\n      [\n";
-            for (size_t j = 0; j < entry.second.size(); ++j) {
-                file << "        [";
-                for (size_t i = 0; i < entry.second[j].coords.size(); ++i) {
-                    file << std::fixed << std::setprecision(4) << entry.second[j].coords[i] << (i < entry.second[j].coords.size() - 1 ? ", " : "");
-                }
-                file << "]" << (j < entry.second.size() - 1 ? ",\n" : "\n");
-            }
-            file << "      ]\n    ]" << (cluster_idx < clusters.size() - 1 ? ",\n" : "\n");
-            cluster_idx++;
-        }
-        file << "  }\n}\n";
-    }
-};
+            print(f"Actualización exitosa. Total de palabras únicas: {len(last_frequencies)}")
 
-double executionTime(const std::function<void()>& func) {
-    auto start = std::chrono::high_resolution_clock::now();
-    func();
-    auto end = std::chrono::high_resolution_clock::now();
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
+        elif current_file_size == last_file_size and current_file_size > 0:
+            # Archivo no ha cambiado, no actualizar la gráfica.
+            # Este es el comportamiento deseado cuando C++ ha terminado de escribir.
+            print("Archivo sin cambios. Esperando nuevo dato...")
+
+        else:
+             # El archivo está vacío o no existe aún
+            print("Esperando a que C++ cree/escriba en el archivo...")
 
 
-struct AnalysisTest
-{
-    int constant;
-    map<int, vector<pair<double, double>>> times_Kmeans;
-};
+    except FileNotFoundError:
+        # El archivo aún no existe (típico al inicio)
+        print("Archivo no encontrado. Esperando a que el productor C++ inicie...")
+    except Exception as e:
+        print(f"Error inesperado: {e}")
 
-void exportAnalysisToJsonManual(const std::vector<AnalysisTest>& analysis, const std::string& filename) {
-    std::ofstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << "ERROR: No se pudo crear el archivo JSON en: " << filename << std::endl;
-        return;
-    }
-    
-    file << "[\n";
-    for (size_t i = 0; i < analysis.size(); ++i) {
-        const auto& test = analysis[i];
-        file << "  {\n";
-        file << "    \"constant\": " << test.constant << ",\n";
-        file << "    \"times_Kmeans\": {\n";
-
-        size_t x_count = 0;
-        for (const auto& [x_val, times] : test.times_Kmeans) {
-            file << "      \"" << x_val << "\": [\n";
-            for (size_t j = 0; j < times.size(); ++j) {
-                file << "        { \"Brute Force\": " << std::fixed << std::setprecision(4) << times[j].first
-                     << ", \"KD-Tree\": " << std::fixed << std::setprecision(4) << times[j].second << " }"
-                     << (j < times.size() - 1 ? ",\n" : "\n");
-            }
-            file << "      ]" << (x_count < test.times_Kmeans.size() - 1 ? ",\n" : "\n");
-            x_count++;
-        }
-        
-        file << "    }\n";
-        file << "  }" << (i < analysis.size() - 1 ? ",\n" : "\n");
-    }
-    file << "]\n";
-
-    file.close();
-    std::cout << "Datos de analisis guardados en: " << filename << std::endl;
-}
-
-std::vector<AnalysisTest> runAnalysisTests(const std::string& data_path,
-                                         const std::vector<int>& constants,
-                                         const std::vector<int>& variables,
-                                         int iteraciones,
-                                         bool is_N_variable,
-                                         int repeticiones)
-{
-    std::vector<AnalysisTest> analysis;
-    
-    for (auto& constV : constants) {
-        AnalysisTest times{ constV };
-
-        for (auto& var : variables) {
-            
-            for (int r = 0; r < repeticiones; ++r) {
-                
-                int N = is_N_variable ? var : 2400;
-                int K = is_N_variable ? constV : var;
-                
-                srand(r + constV * 100);
-                
-                Kmeans kc(data_path, N);
-                double timeBF = executionTime([&]() { kc.kmeans(K, iteraciones); });
-                
-                Kmeans kc_kd(data_path, N);
-                srand(r + constV * 100);
-                double timeKD = executionTime([&]() { kc_kd.kmeans_kd(K, iteraciones); });
-                
-                times.times_Kmeans[var].emplace_back(timeBF, timeKD);
-            }
-            std::cout << (is_N_variable ? "N=" : "K=") << var << " completado. " << std::endl;
-        }
-        analysis.push_back(times);
-    }
-    return analysis;
-}
-
-int main() {
-    const string DATA_FILE_PATH = "/Users/santiagosalas/Desktop/Punto/data2k.csv";
-    const string OUTPUT_PATH = "/Users/santiagosalas/Desktop/resultados/";
-    const int MAX_ITERATIONS = 100;
-    const int NUM_REPETITIONS = 10;
-    
-    try {
-        vector<int> K_CONSTANTES = { 5, 15 };
-        vector<int> N_VARIABLES = { 500, 800, 1100, 1400, 1700, 2000, 2400 };
-
-        cout << "--- Ejecutando Analisis: N Variable (Tiempo vs N) ---" << endl;
-        auto analysis_N = runAnalysisTests(DATA_FILE_PATH, K_CONSTANTES, N_VARIABLES, MAX_ITERATIONS, true, NUM_REPETITIONS);
-        exportAnalysisToJsonManual(analysis_N, OUTPUT_PATH + "tiempos_N_variable.json");
-
-        vector<int> N_CONSTANTES = { 1100, 1500 };
-        vector<int> K_VARIABLES = { 25, 50, 75, 100, 125, 150, 175, 200 };
-
-        cout << "\n--- Ejecutando Analisis: K Variable (Tiempo vs K) ---" << endl;
-        auto analysis_K = runAnalysisTests(DATA_FILE_PATH, N_CONSTANTES, K_VARIABLES, MAX_ITERATIONS, false, NUM_REPETITIONS);
-        exportAnalysisToJsonManual(analysis_K, OUTPUT_PATH + "tiempos_K_variable.json");
-
-        cout << "\n--- Ejecutando para Visualizacion (K=18, N=2400) ---" << endl;
-        srand(1);
-        Kmeans km_viz(DATA_FILE_PATH, 2400);
-        auto clusters_final = km_viz.kmeans_kd(18, MAX_ITERATIONS);
-        km_viz.ExportClustersToJson(clusters_final, OUTPUT_PATH + "clusters_final_kd.json");
-        cout << "Clusters finales guardados en: " << OUTPUT_PATH << "clusters_final_kd.json" << endl;
-    } catch (const std::exception& e) {
-        cerr << "Excepcion fatal en la ejecucion: " << e.what() << endl;
-        cerr << "Asegurate de que la ruta de salida exista: " << OUTPUT_PATH << endl;
-    } catch (...) {
-        cerr << "Excepcion desconocida en la ejecucion." << endl;
-    }
-    
-    return 0;
-}
+    time.sleep(1) # Revisa cada segundo
